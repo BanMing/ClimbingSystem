@@ -3,6 +3,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/MovementSettings.h"
+#include "Engine/DataTable.h"
 #include "GameFramework/Character.h"
 
 #include "LSCharacterBase.generated.h"
@@ -35,6 +37,16 @@ enum class ELSViewMode
 {
 	ThirdPerson,
 	FirstPerson,
+};
+
+UENUM(BlueprintType)
+enum class ELSMovementState
+{
+	None,
+	Grounded,
+	InAir,
+	Mantling,
+	Ragdoll
 };
 
 UENUM(BlueprintType)
@@ -71,17 +83,34 @@ protected:
 #pragma endregion
 
 #pragma region Input
+protected:
+	void PlayerMovementInput(bool IsForwardAxis);
+	FVector GetPlayerMovementInput();
 
 protected:
-	UPROPERTY(EditDefaultsOnly)
-	ELSGaitType DesiredGait = ELSGaitType::Running;
-
-	UPROPERTY(EditDefaultsOnly)
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
 	ELSRotationMode DesiredRotationMode = ELSRotationMode::LookingDirection;
 
-	UPROPERTY(EditDefaultsOnly)
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
+	ELSGaitType DesiredGait = ELSGaitType::Running;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
 	ELSStanceType DesiredStance = ELSStanceType::Standing;
 
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
+	float LookUpDownRate = 1.25f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
+	float LookLeftRightRate = 1.25f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
+	int TimesPressedStance = 0;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
+	bool BreakFall = false;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
+	bool SprintHeld = false;
 #pragma endregion
 
 #pragma region Essential Information
@@ -110,6 +139,12 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly)
 	ELSOverlayState OverlayState = ELSOverlayState::Default;
+
+	UPROPERTY(EditDefaultsOnly)
+	ELSMovementState MovementState = ELSMovementState::None;
+
+	UPROPERTY(EditDefaultsOnly)
+	ELSMovementState PrevMovementState = ELSMovementState::None;
 #pragma endregion
 
 #pragma region Rotation System
@@ -122,9 +157,9 @@ protected:
 #pragma region Movement Data
 protected:
 	UPROPERTY()
-	TObjectPtr<struct FMovementSettings_Stance> MovementData;
+	FMovementSettings_Stance MovementData;
 
 	UPROPERTY(EditDefaultsOnly)
-	TObjectPtr<class FDataTableRowHandle> MovementModel;
+	FDataTableRowHandle MovementModel;
 #pragma endregion
 };

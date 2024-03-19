@@ -4,26 +4,24 @@
 
 #include "Animation/AnimInstance.h"
 #include "Characters/LSCharacter.h"
-#include "Data/MovementSettings.h"
+#include "Kismet/KismetMathLibrary.h"
 
 void ALSCharacterBase::BeginPlay()
 {
 	Super::BeginPlay();
 
-	check(CharacterOwner);
-	check(CharacterOwner->GetMesh());
+	check(GetMesh());
 	// Make sure the mesh and animbp update after the MovementComponent to ensure it gets the most recent values.
 
-	CharacterOwner->GetMesh()->AddTickPrerequisiteComponent(this);
+	GetMesh()->AddTickPrerequisiteActor(this);
 
 	// Set Reference to the Main Anim Instance.
-	MainAnimInstance = CharacterOwner->GetMesh()->GetAnimInstance();
+	MainAnimInstance = GetMesh()->GetAnimInstance();
 
 	// Set the Movement Model
 	// Get movement data from the Movement Model Data table and set the Movement Data Struct.This allows you to easily switch out movement behaviors.
-	check(MovementModel);
-	check(MovementModel->DataTable);
-	MovementData = MovementModel->DataTable->FindRow<FMovementSettings_Stance>(MovementModel->RowName, TEXT(""));
+	check(MovementModel.DataTable);
+	MovementData = *MovementModel.DataTable->FindRow<FMovementSettings_Stance>(MovementModel.RowName, TEXT(""));
 
 	// Update states to use the initial desired values.
 	OnGaitChanged(DesiredGait);
@@ -40,10 +38,41 @@ void ALSCharacterBase::BeginPlay()
 	}
 
 	// Set default rotation values.
-	TargetRotation = CharacterOwner->GetActorRotation();
-	LastVelocityRotation = CharacterOwner->GetActorRotation();
-	LastMovementInputRotation = CharacterOwner->GetActorRotation();
+	TargetRotation = GetActorRotation();
+	LastVelocityRotation = GetActorRotation();
+	LastMovementInputRotation = GetActorRotation();
 }
+
+#pragma region Input
+
+void ALSCharacterBase::PlayerMovementInput(bool IsForwardAxis)
+{
+	if (MovementState == ELSMovementState::None || MovementState == ELSMovementState::Mantling || MovementState == ELSMovementState::Ragdoll)
+	{
+		return;
+	}
+
+	FVector Forward = UKismetMathLibrary::GetForwardVector(GetControlRotation());
+	FVector Right = UKismetMathLibrary::GetRightVector(GetControlRotation());
+	//getmove
+	if (IsForwardAxis)
+	{
+	}
+	else
+	{
+	}
+	//FixDiagonalGamepadValues
+	// AddMovementInput()
+}
+
+FVector ALSCharacterBase::GetPlayerMovementInput()
+{
+	FVector Forward = UKismetMathLibrary::GetForwardVector(GetControlRotation());
+	FVector Right = UKismetMathLibrary::GetRightVector(GetControlRotation());
+	return FVector();
+}
+
+#pragma endregion
 
 #pragma region State Changes
 
