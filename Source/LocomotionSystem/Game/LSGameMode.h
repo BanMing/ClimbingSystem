@@ -4,16 +4,14 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
-#include "LocomotionSystemGameMode.generated.h"
+
+#include "LSGameMode.generated.h"
 
 UCLASS(minimalapi)
-class ALocomotionSystemGameMode : public AGameModeBase
+class ALSGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
 
 public:
-	ALocomotionSystemGameMode();
+	ALSGameMode();
 };
-
-
-

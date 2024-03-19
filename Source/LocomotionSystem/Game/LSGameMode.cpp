@@ -1,10 +1,11 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "LocomotionSystemGameMode.h"
-#include "LocomotionSystemCharacter.h"
+#include "LSGameMode.h"
+
+#include "Characters/LSCharacter.h"
 #include "UObject/ConstructorHelpers.h"
 
-ALocomotionSystemGameMode::ALocomotionSystemGameMode()
+ALSGameMode::ALSGameMode()
 {
 	// set default pawn class to our Blueprinted character
 	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnBPClass(TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter"));
