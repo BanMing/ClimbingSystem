@@ -4,12 +4,117 @@
 
 #include "Animation/AnimInstance.h"
 #include "Characters/LSCharacter.h"
+#include "Curves/CurveFloat.h"
+#include "Curves/CurveVector.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
 
 void ALSCharacterBase::BeginPlay()
 {
 	Super::BeginPlay();
+}
 
+#pragma region Input
+
+void ALSCharacterBase::PlayerMovementInput(bool IsForwardAxis)
+{
+	if (MovementState == ELSMovementState::None || MovementState == ELSMovementState::Mantling || MovementState == ELSMovementState::Ragdoll)
+	{
+		return;
+	}
+
+	const float InputForward = GetInputAxisValue("MoveForward/Backwards");
+	const float InputRight = GetInputAxisValue("MoveRight/Left");
+
+	const float InputRightRange = UKismetMathLibrary::MapRangeClamped(FMath::Abs(InputRight), 0, 0.6f, 1.f, 1.2f);
+	const float InputForwardRange = UKismetMathLibrary::MapRangeClamped(FMath::Abs(InputForward), 0, 0.6f, 1.f, 1.2f);
+	const float MoveForward = FMath::Clamp(InputForward * InputRightRange, -1.f, 1.f);
+	const float MoveRight = FMath::Clamp(InputRight * InputForwardRange, -1.f, 1.f);
+
+	if (IsForwardAxis)
+	{
+		FVector Forward = UKismetMathLibrary::GetForwardVector(GetControlRotation());
+		AddMovementInput(Forward, MoveForward);
+	}
+	else
+	{
+		FVector Right = UKismetMathLibrary::GetRightVector(GetControlRotation());
+		AddMovementInput(Right, MoveRight);
+	}
+}
+
+FVector ALSCharacterBase::GetPlayerMovementInput()
+{
+	FVector MovementInput = FVector::ZeroVector;
+
+	FVector Forward = UKismetMathLibrary::GetForwardVector(GetControlRotation());
+	FVector Right = UKismetMathLibrary::GetRightVector(GetControlRotation());
+
+	const float InputForward = GetInputAxisValue("MoveForward/Backwards");
+	const float InputRight = GetInputAxisValue("MoveRight/Left");
+
+	MovementInput = Forward * InputForward + Right * InputRight;
+	MovementInput.Normalize();
+
+	return MovementInput;
+}
+
+#pragma endregion
+
+#pragma region Essential Information
+
+void ALSCharacterBase::SetEssentialValues()
+{
+	// Set the amount of Acceleration.
+	Acceleration = CalculateAcceleration();
+
+	// Determine if the character is moving by getting it's speed.
+	// The Speed equals the length of the horizontal (x y) velocity, so it does not take vertical movement into account.
+	// If the character is moving, update the last velocity rotation.
+	// This value is saved because it might be useful to know the last orientation of movement even after the character has stopped.
+	Speed = GetVelocity().Size2D();
+	bIsMoving = Speed > 1.f;
+	if (bIsMoving)
+	{
+		LastVelocityRotation = GetVelocity().ToOrientationRotator();
+	}
+
+	// Determine if the character has movement input by getting its movement input amount.
+	// The Movement Input Amount is equal to the current acceleration divided by the max acceleration
+	// so that it has a range of 0 - 1, 1 being the maximum possible amount of input, and 0 beiung none.
+	// If the character has movement input, update the Last Movement Input Rotation.
+	const FVector CurrentAcceleration = GetCharacterMovement()->GetCurrentAcceleration();
+	const float CurrentAccelerationLen = CurrentAcceleration.Length();
+	MovementInputAmount = CurrentAccelerationLen / GetCharacterMovement()->GetMaxAcceleration();
+	bHasMovementInput = MovementInputAmount > 0.f;
+	if (bHasMovementInput)
+	{
+		LastMovementInputRotation = CurrentAcceleration.ToOrientationRotator();
+	}
+
+	// Set the Aim Yaw rate by comparing the current and previous Aim Yaw value, divided by Delta Seconds.
+	// This represents the speed the camera is rotating left to right.
+	AimYawRate = FMath::Abs((GetControlRotation().Yaw - PreviousAimYaw) / UGameplayStatics::GetWorldDeltaSeconds(this));
+}
+
+FVector ALSCharacterBase::CalculateAcceleration()
+{
+	return (GetVelocity() - PreviousVelocity) / UGameplayStatics::GetWorldDeltaSeconds(this);
+}
+
+void ALSCharacterBase::CacheValues()
+{
+	PreviousVelocity = GetVelocity();
+	PreviousAimYaw = GetControlRotation().Yaw;
+}
+
+#pragma endregion
+
+#pragma region State Changes
+
+void ALSCharacterBase::OnBeginPlay()
+{
 	check(GetMesh());
 	// Make sure the mesh and animbp update after the MovementComponent to ensure it gets the most recent values.
 
@@ -19,9 +124,7 @@ void ALSCharacterBase::BeginPlay()
 	MainAnimInstance = GetMesh()->GetAnimInstance();
 
 	// Set the Movement Model
-	// Get movement data from the Movement Model Data table and set the Movement Data Struct.This allows you to easily switch out movement behaviors.
-	check(MovementModel.DataTable);
-	MovementData = *MovementModel.DataTable->FindRow<FMovementSettings_Stance>(MovementModel.RowName, TEXT(""));
+	SetMovementModel();
 
 	// Update states to use the initial desired values.
 	OnGaitChanged(DesiredGait);
@@ -43,38 +146,87 @@ void ALSCharacterBase::BeginPlay()
 	LastMovementInputRotation = GetActorRotation();
 }
 
-#pragma region Input
-
-void ALSCharacterBase::PlayerMovementInput(bool IsForwardAxis)
+void ALSCharacterBase::OnCharacterMovementModeChanged(const EMovementMode& NewMovementMode)
 {
-	if (MovementState == ELSMovementState::None || MovementState == ELSMovementState::Mantling || MovementState == ELSMovementState::Ragdoll)
+	if (NewMovementMode == EMovementMode::MOVE_Walking || NewMovementMode == EMovementMode::MOVE_NavWalking)
+	{
+		OnMovementStateChanged(ELSMovementState::Grounded);
+	}
+	else if (NewMovementMode == EMovementMode::MOVE_Falling)
+	{
+		OnMovementStateChanged(ELSMovementState::InAir);
+	}
+}
+
+void ALSCharacterBase::OnMovementStateChanged(const ELSMovementState& NewMovementState)
+{
+	if (MovementState == NewMovementState)
 	{
 		return;
 	}
 
-	FVector Forward = UKismetMathLibrary::GetForwardVector(GetControlRotation());
-	FVector Right = UKismetMathLibrary::GetRightVector(GetControlRotation());
-	//getmove
-	if (IsForwardAxis)
+	MovementState = NewMovementState;
+
+	// If the character enters the air, set the In Air Rotation and uncrouch if crouched.
+	// If the character is currently rolling, enable the ragdoll.
+	if (MovementState == ELSMovementState::InAir)
 	{
+		if (MovementAction == ELSMovementAction::None)
+		{
+			InAirRotation = GetActorRotation();
+			if (Stance == ELSStanceType::Crouching)
+			{
+				UnCrouch();
+			}
+		}
+		else if (MovementAction == ELSMovementAction::Rolling)
+		{
+			// TODO RagdollStart()
+		}
 	}
-	else
+	else if (MovementState == ELSMovementState::InAir && PrevMovementState == ELSMovementState::Mantling)
 	{
+		// TODO StopMantling()
 	}
-	//FixDiagonalGamepadValues
-	// AddMovementInput()
+
+	// Stop the Mantle Timeline if transitioning to the ragdoll state while mantling.
 }
 
-FVector ALSCharacterBase::GetPlayerMovementInput()
+void ALSCharacterBase::OnMovementActionChanged(const ELSMovementAction& NewMovementAction)
 {
-	FVector Forward = UKismetMathLibrary::GetForwardVector(GetControlRotation());
-	FVector Right = UKismetMathLibrary::GetRightVector(GetControlRotation());
-	return FVector();
+	if (MovementAction == NewMovementAction)
+	{
+		return;
+	}
+	ELSMovementAction PrevMovementAction = MovementAction;
+	MovementAction = NewMovementAction;
+	// Make the character crouch if performing a roll.
+	if (MovementAction == ELSMovementAction::Rolling)
+	{
+		Crouch();
+	}
+
+	// Upon ending a roll, reset the stance back to its desired value.
+	if (PrevMovementAction == ELSMovementAction::Rolling)
+	{
+		if (DesiredStance == ELSStanceType::Crouching)
+		{
+			Crouch();
+		}
+		else
+		{
+			UnCrouch();
+		}
+	}
 }
 
-#pragma endregion
-
-#pragma region State Changes
+void ALSCharacterBase::OnStanceChanged(const ELSStanceType& NewStanceType)
+{
+	if (NewStanceType != Stance)
+	{
+		Stance = NewStanceType;
+	}
+}
 
 void ALSCharacterBase::OnGaitChanged(const ELSGaitType& NewActualGait)
 {
@@ -129,4 +281,262 @@ void ALSCharacterBase::OnViewModeChanged(const ELSViewMode& NewViewMode)
 	}
 }
 
+#pragma endregion
+
+#pragma region Movement System
+void ALSCharacterBase::SetMovementModel()
+{
+	check(MovementModel.DataTable);
+	MovementData = *MovementModel.DataTable->FindRow<FMovementSettings_State>(MovementModel.RowName, TEXT(""));
+}
+
+void ALSCharacterBase::UpdateCharacterMovement()
+{
+	// Set the Allowed Gait
+	ELSGaitType AllowedGait = GetAllowedGait();
+
+	// Determine the Actual Gait.If it is different from the current Gait, Set the new Gait Event.
+	ELSGaitType ActualGait = GetActualGait(AllowedGait);
+	if (Gait != ActualGait)
+	{
+		OnGaitChanged(ActualGait);
+	}
+
+	// Use the allowed gait to update the movement settings.
+	UpdateDynamicMovementSettings(AllowedGait);
+}
+
+void ALSCharacterBase::UpdateDynamicMovementSettings(const ELSGaitType& AllowGait)
+{
+	// Set the Current Movement Settings.
+	SetTargetMovementSettings();
+
+	// Update the Character Max Walk Speed to the configured speeds based on the currently Allowed Gait.
+	switch (AllowGait)
+	{
+		case ELSGaitType::Walking:
+			GetCharacterMovement()->MaxWalkSpeed = CurMovementSettings.WalkSpeed;
+			GetCharacterMovement()->MaxWalkSpeedCrouched = CurMovementSettings.WalkSpeed;
+			break;
+		case ELSGaitType::Running:
+			GetCharacterMovement()->MaxWalkSpeed = CurMovementSettings.RunSpeed;
+			GetCharacterMovement()->MaxWalkSpeedCrouched = CurMovementSettings.RunSpeed;
+			break;
+		case ELSGaitType::Sprinting:
+			GetCharacterMovement()->MaxWalkSpeed = CurMovementSettings.SprintSpeed;
+			GetCharacterMovement()->MaxWalkSpeedCrouched = CurMovementSettings.SprintSpeed;
+			break;
+	}
+
+	// Update the Acceleration, Deceleration, and Ground Friction using the Movement Curve.
+	// This allows for fine control over movement behavior at each speed (May not be suitable for replication).
+	const FVector CurveValue = CurMovementSettings.MovementCurve->GetVectorValue(GetMappedSpeed());
+	GetCharacterMovement()->MaxAcceleration = CurveValue.X;
+	GetCharacterMovement()->BrakingDecelerationWalking = CurveValue.Y;
+	GetCharacterMovement()->GroundFriction = CurveValue.Z;
+}
+
+void ALSCharacterBase::SetTargetMovementSettings()
+{
+	if (RotationMode == ELSRotationMode::VelocityDirection)
+	{
+		if (Stance == ELSStanceType::Standing)
+		{
+			CurMovementSettings = MovementData.VelocityDirection.Standing;
+		}
+		else if (Stance == ELSStanceType::Crouching)
+		{
+			CurMovementSettings = MovementData.VelocityDirection.Crouching;
+		}
+	}
+	else if (RotationMode == ELSRotationMode::LookingDirection)
+	{
+		if (Stance == ELSStanceType::Standing)
+		{
+			CurMovementSettings = MovementData.LookingDirection.Standing;
+		}
+		else if (Stance == ELSStanceType::Crouching)
+		{
+			CurMovementSettings = MovementData.LookingDirection.Crouching;
+		}
+	}
+	else if (RotationMode == ELSRotationMode::Aiming)
+	{
+		if (Stance == ELSStanceType::Standing)
+		{
+			CurMovementSettings = MovementData.Aiming.Standing;
+		}
+		else if (Stance == ELSStanceType::Crouching)
+		{
+			CurMovementSettings = MovementData.Aiming.Crouching;
+		}
+	}
+}
+
+ELSGaitType ALSCharacterBase::GetAllowedGait()
+{
+	ELSGaitType Res = ELSGaitType::Walking;
+	if (Stance == ELSStanceType::Standing)
+	{
+		if (DesiredGait == ELSGaitType::Running)
+		{
+			Res = ELSGaitType::Running;
+		}
+		else if (DesiredGait == ELSGaitType::Sprinting && CanSprint())
+		{
+			Res = ELSGaitType::Sprinting;
+		}
+	}
+	else if (Stance == ELSStanceType::Crouching && (DesiredGait == ELSGaitType::Running || DesiredGait == ELSGaitType::Sprinting))
+	{
+		Res = ELSGaitType::Running;
+	}
+
+	return Res;
+}
+
+ELSGaitType ALSCharacterBase::GetActualGait(const ELSGaitType& AllowGait)
+{
+	ELSGaitType Res = ELSGaitType::Walking;
+	const float SpeedOffset = 10.f;
+	if (Speed >= CurMovementSettings.RunSpeed + SpeedOffset)
+	{
+		if (AllowGait == ELSGaitType::Sprinting)
+		{
+			Res = ELSGaitType::Sprinting;
+		}
+		else
+		{
+			Res = ELSGaitType::Running;
+		}
+	}
+	else if (Speed >= CurMovementSettings.WalkSpeed + SpeedOffset)
+	{
+		Res = ELSGaitType::Running;
+	}
+
+	return Res;
+}
+
+bool ALSCharacterBase::CanSprint()
+{
+	bool bRes = false;
+	if (!bHasMovementInput || RotationMode == ELSRotationMode::Aiming)
+	{
+		return bRes;
+	}
+
+	bool bIsOverInputAmount = MovementInputAmount > 0.9f;
+	if (RotationMode == ELSRotationMode::VelocityDirection)
+	{
+		bRes = bIsOverInputAmount;
+	}
+	else if (RotationMode == ELSRotationMode::LookingDirection)
+	{
+		FRotator AccelertionRotator = GetCharacterMovement()->GetCurrentAcceleration().ToOrientationRotator();
+		FRotator DeltaRotator = UKismetMathLibrary::NormalizedDeltaRotator(AccelertionRotator, GetControlRotation());
+		bRes = bIsOverInputAmount && FMath::Abs(DeltaRotator.Yaw) < 50.f;
+	}
+
+	return bRes;
+}
+
+float ALSCharacterBase::GetMappedSpeed()
+{
+	// Map the character's current speed to the configured movement speeds with a range of 0-3,
+	// with 0 = stopped, 1 = the Walk Speed, 2 = the Run Speed, and 3 = the Sprint Speed.
+	// This allows you to vary the movement speeds but still use the mapped range in calculations for consistent results.
+
+	const float LocWalkSpeed = CurMovementSettings.WalkSpeed;
+	const float LocRunSpeed = CurMovementSettings.RunSpeed;
+	const float LocSprintSpeed = CurMovementSettings.SprintSpeed;
+
+	const float WalkSpeed = UKismetMathLibrary::MapRangeClamped(Speed, 0.f, LocWalkSpeed, 0.f, 1.f);
+	const float RunSpeed = UKismetMathLibrary::MapRangeClamped(Speed, LocWalkSpeed, LocRunSpeed, 1.f, 2.f);
+	const float SprintSpeed = UKismetMathLibrary::MapRangeClamped(Speed, LocRunSpeed, LocSprintSpeed, 2.f, 3.);
+
+	float MapSpeed = Speed > LocWalkSpeed ? RunSpeed : WalkSpeed;
+	MapSpeed = Speed > LocRunSpeed ? SprintSpeed : MapSpeed;
+
+	return MapSpeed;
+}
+
+UAnimMontage* ALSCharacterBase::GetRollAnimation()
+{
+	return nullptr;
+}
+
+#pragma endregion
+
+#pragma region Rotation System
+
+void ALSCharacterBase::UpdateGroudedRotation()
+{
+	// Rolling Rotation
+	if (bHasMovementInput && MovementAction == ELSMovementAction::Rolling)
+	{
+		SmoothCharacterRotation(FRotator(0.f, LastMovementInputRotation.Yaw, 0.f), 0.f, 2.f);
+	}
+
+	if (CanUpdateMovingRotation())
+	{
+		switch (RotationMode)
+		{
+			case ELSRotationMode::VelocityDirection:
+				SmoothCharacterRotation(FRotator(0.f, LastVelocityRotation.Yaw, 0.f), 800.f, CalculateGroundedRotationRate());
+				break;
+			case ELSRotationMode::LookingDirection:
+				switch (Gait)
+				{
+					case ELSGaitType::Walking:
+					case ELSGaitType::Running:
+						break;
+					case ELSGaitType::Sprinting:
+						SmoothCharacterRotation(FRotator(0.f, LastVelocityRotation.Yaw, 0.f), 500.f, CalculateGroundedRotationRate());
+						break;
+				}
+				break;
+			case ELSRotationMode::Aiming:
+				SmoothCharacterRotation(FRotator(0.f, GetControlRotation().Yaw, 0.f), 1000.f, 20.f);
+				break;
+		}
+	}
+	else
+	{
+	}
+}
+
+void ALSCharacterBase::SmoothCharacterRotation(FRotator Target, float TargetInterpSpeed, float ActorInterpSpeed)
+{
+	const float DeltaTime = UGameplayStatics::GetWorldDeltaSeconds(this);
+	TargetRotation = FMath::RInterpConstantTo(TargetRotation, Target, DeltaTime, TargetInterpSpeed);
+
+	FRotator ActorRotation = FMath::RInterpTo(GetActorRotation(), TargetRotation, DeltaTime, ActorInterpSpeed);
+	SetActorRotation(ActorRotation);
+}
+
+float ALSCharacterBase::CalculateGroundedRotationRate()
+{
+	const float CurveValue = CurMovementSettings.RotationRateCurve->GetFloatValue(GetMappedSpeed());
+	const float AimYawValue = UKismetMathLibrary::MapRangeClamped(AimYawRate, 0.f, 300.f, 1.f, 3.f);
+	return CurveValue * AimYawValue;
+}
+
+bool ALSCharacterBase::CanUpdateMovingRotation()
+{
+	return (bIsMoving && bHasMovementInput || Speed > 150.f) && !HasAnyRootMotion();
+}
+
+#pragma endregion
+#pragma region Utility
+float ALSCharacterBase::GetAnimCurveValue(const FName& CurveName)
+{
+	float Res = 0.f;
+	if (IsValid(MainAnimInstance))
+	{
+		Res = MainAnimInstance->GetCurveValue(CurveName);
+	}
+
+	return Res;
+}
 #pragma endregion

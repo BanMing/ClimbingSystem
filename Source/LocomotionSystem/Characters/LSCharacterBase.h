@@ -50,6 +50,16 @@ enum class ELSMovementState
 };
 
 UENUM(BlueprintType)
+enum class ELSMovementAction
+{
+	None,
+	LowMantle,
+	HighMantle,
+	Rolling,
+	GettingUp
+};
+
+UENUM(BlueprintType)
 enum class ELSOverlayState
 {
 	Default,
@@ -66,6 +76,8 @@ enum class ELSOverlayState
 	Box,
 	Barrel,
 };
+
+class UAnimMontage;
 
 UCLASS(config = Game)
 class ALSCharacterBase : public ACharacter
@@ -114,52 +126,130 @@ protected:
 #pragma endregion
 
 #pragma region Essential Information
+
 protected:
+	// These values represent how the capsule is moving as well as how it wants to move,
+	//  and therefore are essential for any data driven animation system.
+	//  They are also used throughout the system for various functions, so I found it is easiest to manage them all in one place.
+	void SetEssentialValues();
+
+	// Calculate the Acceleration by comparing the current and previous velocity.
+	// The Current Acceleration returned by the movement component equals the input acceleration,
+	// and does not represent the actual physical accelration of the character.
+	FVector CalculateAcceleration();
+
+	// Cache certain values to be used in calculations on the next frame
+	void CacheValues();
+
+protected:
+	FVector Acceleration;
+	bool bIsMoving = false;
+	bool bHasMovementInput = false;
 	FRotator LastVelocityRotation = FRotator::ZeroRotator;
 	FRotator LastMovementInputRotation = FRotator::ZeroRotator;
+	float Speed;
+	float MovementInputAmount;
+	float AimYawRate;
 
+	FVector PreviousVelocity = FVector::ZeroVector;
+	float PreviousAimYaw = 0.f;
 #pragma endregion
 
 #pragma region State Changes
 protected:
+	void OnBeginPlay();
+
+	// Use the Character Movement Mode changes to set the Movement States to the right values.
+	// This allows you to have a custom set of movement states
+	// but still use the functionality of the default character movement component.
+	void OnCharacterMovementModeChanged(const EMovementMode& NewMovementMode);
+	void OnMovementStateChanged(const ELSMovementState& NewMovementState);
+	void OnMovementActionChanged(const ELSMovementAction& NewMovementAction);
+	void OnStanceChanged(const ELSStanceType& NewStanceType);
 	void OnGaitChanged(const ELSGaitType& NewActualGait);
 	void OnRotationModeChanged(const ELSRotationMode& NewRotationMode);
 	void OnOverlayStateChanged(const ELSOverlayState& NewOverlayState);
 	void OnViewModeChanged(const ELSViewMode& NewViewMode);
 
 protected:
-	UPROPERTY(EditDefaultsOnly)
-	ELSGaitType Gait = ELSGaitType::Walking;
-
-	UPROPERTY(EditDefaultsOnly)
-	ELSRotationMode RotationMode = ELSRotationMode::LookingDirection;
-
-	UPROPERTY(EditDefaultsOnly)
-	ELSViewMode ViewMode = ELSViewMode::ThirdPerson;
-
-	UPROPERTY(EditDefaultsOnly)
-	ELSOverlayState OverlayState = ELSOverlayState::Default;
-
-	UPROPERTY(EditDefaultsOnly)
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
 	ELSMovementState MovementState = ELSMovementState::None;
 
-	UPROPERTY(EditDefaultsOnly)
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
 	ELSMovementState PrevMovementState = ELSMovementState::None;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
+	ELSMovementAction MovementAction = ELSMovementAction::None;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
+	ELSRotationMode RotationMode = ELSRotationMode::LookingDirection;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
+	ELSGaitType Gait = ELSGaitType::Walking;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
+	ELSStanceType Stance = ELSStanceType::Standing;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
+	ELSViewMode ViewMode = ELSViewMode::ThirdPerson;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|State")
+	ELSOverlayState OverlayState = ELSOverlayState::Default;
+
+#pragma endregion
+
+#pragma region Movement System
+protected:
+	// Get movement data from the Movement Model Data table and set the Movement Data Struct.
+	// This allows you to easily switch out movement behaviors.
+	void SetMovementModel();
+	void UpdateCharacterMovement();
+	void UpdateDynamicMovementSettings(const ELSGaitType& AllowGait);
+	void SetTargetMovementSettings();
+
+	ELSGaitType GetAllowedGait();
+	ELSGaitType GetActualGait(const ELSGaitType& AllowGait);
+
+	// Determine if the character is currently able to sprint based on the Rotation mode and current acceleration(input) rotation.
+	// If the character is in the Looking Rotation mode, only allow sprinting if there is full movement input and
+	// it is faced forward relative to the camera + or -50 degrees.
+	bool CanSprint();
+
+	float GetMappedSpeed();
+	virtual UAnimMontage* GetRollAnimation();
+
+protected:
+	UPROPERTY(BlueprintReadOnly, Category = "Locomotion|Movement")
+	FMovementSettings_State MovementData;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Movement")
+	FDataTableRowHandle MovementModel;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Locomotion|Movement")
+	FMovementSettings CurMovementSettings;
 #pragma endregion
 
 #pragma region Rotation System
+protected:
+	void UpdateGroudedRotation();
+
+	// Interpolate the Target Rotation for extra smooth rotation behavior
+	void SmoothCharacterRotation(FRotator Target, float TargetInterpSpeed, float ActorInterpSpeed);
+	float CalculateGroundedRotationRate();
+	bool CanUpdateMovingRotation();
 
 protected:
+	UPROPERTY(BlueprintReadOnly, Category = "Locomotion|Rotation")
 	FRotator TargetRotation = FRotator::ZeroRotator;
 
+	UPROPERTY(BlueprintReadOnly, Category = "Locomotion|Rotation")
+	FRotator InAirRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Locomotion|Rotation")
+	float YawOffset = 0.f;
 #pragma endregion
 
-#pragma region Movement Data
-protected:
-	UPROPERTY()
-	FMovementSettings_Stance MovementData;
-
-	UPROPERTY(EditDefaultsOnly)
-	FDataTableRowHandle MovementModel;
+#pragma region Utility
+	float GetAnimCurveValue(const FName& CurveName);
 #pragma endregion
 };
