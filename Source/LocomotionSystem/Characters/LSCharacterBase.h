@@ -86,12 +86,11 @@ class ALSCharacterBase : public ACharacter
 
 public:
 	virtual void BeginPlay() override;
-
+	virtual void Tick(float DeltaSeconds) override;
 #pragma region References
 protected:
 	UPROPERTY()
 	TObjectPtr<class UAnimInstance> MainAnimInstance;
-
 #pragma endregion
 
 #pragma region Input
@@ -119,13 +118,15 @@ protected:
 	int TimesPressedStance = 0;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
-	bool BreakFall = false;
+	bool bBreakFall = false;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Locomotion|Input")
-	bool SprintHeld = false;
+	bool bSprintHeld = false;
 #pragma endregion
 
 #pragma region Essential Information
+public:
+	 void GetMovementInfo(struct FMovementEssentialInfo& OutMovementInfo) const;
 
 protected:
 	// These values represent how the capsule is moving as well as how it wants to move,
@@ -135,7 +136,7 @@ protected:
 
 	// Calculate the Acceleration by comparing the current and previous velocity.
 	// The Current Acceleration returned by the movement component equals the input acceleration,
-	// and does not represent the actual physical accelration of the character.
+	// and does not represent the actual physical acceleration of the character.
 	FVector CalculateAcceleration();
 
 	// Cache certain values to be used in calculations on the next frame
@@ -155,7 +156,23 @@ protected:
 	float PreviousAimYaw = 0.f;
 #pragma endregion
 
+#pragma region State Events
+public:
+	virtual void OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode = 0) override;
+
+	virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
+	virtual void OnEndCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
+
+	virtual void Landed(const FHitResult& Hit) override;
+
+	void BreakfallEvent();
+	virtual void OnJumped_Implementation() override;
+#pragma endregion
+
 #pragma region State Changes
+public:
+	void GetMovementStates(struct FMovementStates& OutMovementStates) const;
+
 protected:
 	void OnBeginPlay();
 
@@ -213,9 +230,9 @@ protected:
 	// Determine if the character is currently able to sprint based on the Rotation mode and current acceleration(input) rotation.
 	// If the character is in the Looking Rotation mode, only allow sprinting if there is full movement input and
 	// it is faced forward relative to the camera + or -50 degrees.
-	bool CanSprint();
+	bool CanSprint() const;
 
-	float GetMappedSpeed();
+	float GetMappedSpeed() const;
 	virtual UAnimMontage* GetRollAnimation();
 
 protected:
@@ -231,12 +248,22 @@ protected:
 
 #pragma region Rotation System
 protected:
-	void UpdateGroudedRotation();
+	void UpdateGroundedRotation();
+
+	void UpdateInAirRotation();
 
 	// Interpolate the Target Rotation for extra smooth rotation behavior
-	void SmoothCharacterRotation(FRotator Target, float TargetInterpSpeed, float ActorInterpSpeed);
-	float CalculateGroundedRotationRate();
-	bool CanUpdateMovingRotation();
+	void SmoothCharacterRotation(const FRotator& Target, float TargetInterpSpeed, float ActorInterpSpeed);
+
+	void AddCharacterRotation(const FRotator& DeltaRotation);
+
+	// Prevent the character from rotating past a certain angle.
+	void LimitRotation(float AimYawMin, float AimYawMax, float InterpSpeed);
+
+	// Update the Actors Location and Rotation as well as the Target Rotation variable to keep everything in sync.
+	bool SetActorLocationAndRotationLoc(FVector NewLocation, FRotator NewRotation, bool bSweep = false, FHitResult* OutSweepHitResult = nullptr, ETeleportType Teleport = ETeleportType::None);
+	float CalculateGroundedRotationRate() const;
+	bool CanUpdateMovingRotation() const;
 
 protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Locomotion|Rotation")
@@ -250,6 +277,8 @@ protected:
 #pragma endregion
 
 #pragma region Utility
-	float GetAnimCurveValue(const FName& CurveName);
+	float GetAnimCurveValue(const FName& CurveName) const;
+	FVector GetCapsuleBaseLocation(float ZOffset) const;
+	FVector GetCapsuleLocationFromBase(const FVector& BaseLocation, float ZOffset) const;
 #pragma endregion
 };

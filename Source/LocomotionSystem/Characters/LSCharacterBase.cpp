@@ -3,7 +3,9 @@
 #include "LSCharacterBase.h"
 
 #include "Animation/AnimInstance.h"
+#include "Animations/LSAnimInstance.h"
 #include "Characters/LSCharacter.h"
+#include "Components/CapsuleComponent.h"
 #include "Curves/CurveFloat.h"
 #include "Curves/CurveVector.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -13,6 +15,36 @@
 void ALSCharacterBase::BeginPlay()
 {
 	Super::BeginPlay();
+	OnBeginPlay();
+}
+
+void ALSCharacterBase::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	SetEssentialValues();
+
+	// Check Movement Mode
+	if (MovementState == ELSMovementState::Grounded)
+	{
+		UpdateCharacterMovement();
+		UpdateGroundedRotation();
+	}
+	else if (MovementState == ELSMovementState::InAir)
+	{
+		UpdateInAirRotation();
+
+		// Perform a mantle check if falling while movement input is pressed.
+		if (bHasMovementInput)
+		{
+			// TODO MantleCheck()
+		}
+	}
+	else if (MovementState == ELSMovementState::Ragdoll)
+	{
+		// TODO RagdollUpdate()
+	}
+
+	CacheValues();
 }
 
 #pragma region Input
@@ -64,6 +96,19 @@ FVector ALSCharacterBase::GetPlayerMovementInput()
 
 #pragma region Essential Information
 
+void ALSCharacterBase::GetMovementInfo(FMovementEssentialInfo& OutMovementInfo) const
+{
+	OutMovementInfo.Velocity = GetVelocity();
+	OutMovementInfo.Acceleration = Acceleration;
+	OutMovementInfo.MovementInput = GetCharacterMovement()->GetCurrentAcceleration();
+	OutMovementInfo.bIsMoving = bIsMoving;
+	OutMovementInfo.bHasMovementInput = bHasMovementInput;
+	OutMovementInfo.Speed = Speed;
+	OutMovementInfo.MovementInputAmount = MovementInputAmount;
+	OutMovementInfo.AimRotation = GetControlRotation();
+	OutMovementInfo.AimYawRate = AimYawRate;
+}
+
 void ALSCharacterBase::SetEssentialValues()
 {
 	// Set the amount of Acceleration.
@@ -111,7 +156,79 @@ void ALSCharacterBase::CacheValues()
 
 #pragma endregion
 
+#pragma region Movement State Events
+
+void ALSCharacterBase::OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode)
+{
+	Super::OnMovementModeChanged(PrevMovementMode, PreviousCustomMode);
+	OnCharacterMovementModeChanged(GetCharacterMovement()->MovementMode);
+}
+
+void ALSCharacterBase::OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust)
+{
+	Super::OnStartCrouch(HalfHeightAdjust, ScaledHalfHeightAdjust);
+	OnStanceChanged(ELSStanceType::Crouching);
+}
+
+void ALSCharacterBase::OnEndCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust)
+{
+	Super::OnEndCrouch(HalfHeightAdjust, ScaledHalfHeightAdjust);
+	OnStanceChanged(ELSStanceType::Standing);
+}
+
+void ALSCharacterBase::Landed(const FHitResult& Hit)
+{
+	Super::Landed(Hit);
+	// TODO On Landed: Temporarily increase the braking friction on lands to make landings more accurate, or trigger a breakfall roll.
+	// if (bBreakFall)
+	//{
+	//	BreakfallEvent();
+	// }
+	// else
+	//{
+	//	GetCharacterMovement()->BrakingFrictionFactor = bHasMovementInput ? 0.5f : 3.f;
+	//	UKismetSystemLibrary::RetriggerableDelay(this, 0.5f);
+	//	GetCharacterMovement()->BrakingFrictionFactor = 0.f;
+	// }
+}
+
+void ALSCharacterBase::BreakfallEvent()
+{
+	// TODO Breakfall: Simply play a Root Motion Montage.
+	if (IsValid(MainAnimInstance))
+	{
+		// MainAnimInstance->Montage_Play();
+	}
+}
+
+void ALSCharacterBase::OnJumped_Implementation()
+{
+	Super::OnJumped_Implementation();
+	// On Jumped : Set the new In Air Rotation to the velocity rotation if speed is greater than 100.
+	InAirRotation = Speed > 100.f ? LastVelocityRotation : GetActorRotation();
+
+	if (IsValid(MainAnimInstance))
+	{
+		// MainAnimInstance->Jumped();
+	}
+}
+
+#pragma endregion
+
 #pragma region State Changes
+
+void ALSCharacterBase::GetMovementStates(FMovementStates& OutMovementStates) const
+{
+	OutMovementStates.PawnMovementMode = GetCharacterMovement()->MovementMode;
+	OutMovementStates.MovementState = MovementState;
+	OutMovementStates.PrevMovementState = PrevMovementState;
+	OutMovementStates.MovementAction = MovementAction;
+	OutMovementStates.RotationMode = RotationMode;
+	OutMovementStates.ActualGait = Gait;
+	OutMovementStates.ActualStance = Stance;
+	OutMovementStates.ViewMode = ViewMode;
+	OutMovementStates.OverlayState = OverlayState;
+}
 
 void ALSCharacterBase::OnBeginPlay()
 {
@@ -418,7 +535,7 @@ ELSGaitType ALSCharacterBase::GetActualGait(const ELSGaitType& AllowGait)
 	return Res;
 }
 
-bool ALSCharacterBase::CanSprint()
+bool ALSCharacterBase::CanSprint() const
 {
 	bool bRes = false;
 	if (!bHasMovementInput || RotationMode == ELSRotationMode::Aiming)
@@ -441,7 +558,7 @@ bool ALSCharacterBase::CanSprint()
 	return bRes;
 }
 
-float ALSCharacterBase::GetMappedSpeed()
+float ALSCharacterBase::GetMappedSpeed() const
 {
 	// Map the character's current speed to the configured movement speeds with a range of 0-3,
 	// with 0 = stopped, 1 = the Walk Speed, 2 = the Run Speed, and 3 = the Sprint Speed.
@@ -470,7 +587,7 @@ UAnimMontage* ALSCharacterBase::GetRollAnimation()
 
 #pragma region Rotation System
 
-void ALSCharacterBase::UpdateGroudedRotation()
+void ALSCharacterBase::UpdateGroundedRotation()
 {
 	// Rolling Rotation
 	if (bHasMovementInput && MovementAction == ELSMovementAction::Rolling)
@@ -486,16 +603,15 @@ void ALSCharacterBase::UpdateGroudedRotation()
 				SmoothCharacterRotation(FRotator(0.f, LastVelocityRotation.Yaw, 0.f), 800.f, CalculateGroundedRotationRate());
 				break;
 			case ELSRotationMode::LookingDirection:
-				switch (Gait)
+			{
+				float TargetYaw = LastVelocityRotation.Yaw;
+				if (Gait == ELSGaitType::Walking || Gait == ELSGaitType::Running)
 				{
-					case ELSGaitType::Walking:
-					case ELSGaitType::Running:
-						break;
-					case ELSGaitType::Sprinting:
-						SmoothCharacterRotation(FRotator(0.f, LastVelocityRotation.Yaw, 0.f), 500.f, CalculateGroundedRotationRate());
-						break;
+					TargetYaw = GetControlRotation().Yaw + GetAnimCurveValue("YawOffset");
 				}
-				break;
+				SmoothCharacterRotation(FRotator(0.f, TargetYaw, 0.f), 500.f, CalculateGroundedRotationRate());
+			}
+			break;
 			case ELSRotationMode::Aiming:
 				SmoothCharacterRotation(FRotator(0.f, GetControlRotation().Yaw, 0.f), 1000.f, 20.f);
 				break;
@@ -503,10 +619,41 @@ void ALSCharacterBase::UpdateGroudedRotation()
 	}
 	else
 	{
+		// Not Moving
+		if (ViewMode == ELSViewMode::FirstPerson || RotationMode == ELSRotationMode::Aiming)
+		{
+			LimitRotation(-100, 100, 20);
+		}
+
+		// Apply the RotationAmount curve from Turn In Place Animations.
+		// The Rotation Amount curve defines how much rotation should be applied each frame,
+		// and is calculated for animations that are animated at 30fps.
+		const float RotationAmount = GetAnimCurveValue("RotationAmount");
+		if (FMath::Abs(RotationAmount) > 0.001f)
+		{
+			const float DeltaSec = UGameplayStatics::GetWorldDeltaSeconds(this) / 1 / 30.f;
+			AddActorWorldRotation(FRotator(0.f, RotationAmount * DeltaSec, 0.f));
+			TargetRotation = GetActorRotation();
+		}
 	}
 }
 
-void ALSCharacterBase::SmoothCharacterRotation(FRotator Target, float TargetInterpSpeed, float ActorInterpSpeed)
+void ALSCharacterBase::UpdateInAirRotation()
+{
+	// Velocity / Looking Direction Rotation
+	if (RotationMode == ELSRotationMode::VelocityDirection || RotationMode == ELSRotationMode::LookingDirection)
+	{
+		SmoothCharacterRotation(FRotator(0.f, InAirRotation.Yaw, 0.f), 0.f, 5.f);
+	}
+	// Aiming Rotation
+	else if (RotationMode == ELSRotationMode::Aiming)
+	{
+		SmoothCharacterRotation(FRotator(0.f, GetControlRotation().Yaw, 0.f), 0.f, 15.f);
+		InAirRotation = GetActorRotation();
+	}
+}
+
+void ALSCharacterBase::SmoothCharacterRotation(const FRotator& Target, float TargetInterpSpeed, float ActorInterpSpeed)
 {
 	const float DeltaTime = UGameplayStatics::GetWorldDeltaSeconds(this);
 	TargetRotation = FMath::RInterpConstantTo(TargetRotation, Target, DeltaTime, TargetInterpSpeed);
@@ -515,21 +662,47 @@ void ALSCharacterBase::SmoothCharacterRotation(FRotator Target, float TargetInte
 	SetActorRotation(ActorRotation);
 }
 
-float ALSCharacterBase::CalculateGroundedRotationRate()
+void ALSCharacterBase::AddCharacterRotation(const FRotator& DeltaRotation)
+{
+	TargetRotation = UKismetMathLibrary::ComposeRotators(TargetRotation, DeltaRotation);
+	AddActorWorldRotation(DeltaRotation);
+}
+
+void ALSCharacterBase::LimitRotation(float AimYawMin, float AimYawMax, float InterpSpeed)
+{
+	FRotator Delta = GetControlRotation() - GetActorRotation();
+	Delta.Normalize();
+	if (AimYawMin >= Delta.Yaw && Delta.Yaw <= AimYawMax)
+	{
+		return;
+	}
+
+	float TargetYaw = Delta.Yaw > 0.f ? GetControlRotation().Yaw + AimYawMin : GetControlRotation().Yaw + AimYawMax;
+	SmoothCharacterRotation(FRotator(0.f, TargetYaw, 0.f), 0.f, InterpSpeed);
+}
+
+bool ALSCharacterBase::SetActorLocationAndRotationLoc(FVector NewLocation, FRotator NewRotation, bool bSweep, FHitResult* OutSweepHitResult, ETeleportType Teleport)
+{
+	TargetRotation = NewRotation;
+	return SetActorLocationAndRotation(NewLocation, NewRotation, bSweep, OutSweepHitResult, Teleport);
+}
+
+float ALSCharacterBase::CalculateGroundedRotationRate() const
 {
 	const float CurveValue = CurMovementSettings.RotationRateCurve->GetFloatValue(GetMappedSpeed());
 	const float AimYawValue = UKismetMathLibrary::MapRangeClamped(AimYawRate, 0.f, 300.f, 1.f, 3.f);
 	return CurveValue * AimYawValue;
 }
 
-bool ALSCharacterBase::CanUpdateMovingRotation()
+bool ALSCharacterBase::CanUpdateMovingRotation() const
 {
 	return (bIsMoving && bHasMovementInput || Speed > 150.f) && !HasAnyRootMotion();
 }
 
 #pragma endregion
+
 #pragma region Utility
-float ALSCharacterBase::GetAnimCurveValue(const FName& CurveName)
+float ALSCharacterBase::GetAnimCurveValue(const FName& CurveName) const
 {
 	float Res = 0.f;
 	if (IsValid(MainAnimInstance))
@@ -539,4 +712,21 @@ float ALSCharacterBase::GetAnimCurveValue(const FName& CurveName)
 
 	return Res;
 }
+
+FVector ALSCharacterBase::GetCapsuleBaseLocation(float ZOffset) const
+{
+	const UCapsuleComponent* CapsuleComp = GetCapsuleComponent();
+	const float Height = CapsuleComp->GetScaledCapsuleHalfHeight() + ZOffset;
+
+	return CapsuleComp->GetComponentLocation() - Height * CapsuleComp->GetUpVector();
+}
+
+FVector ALSCharacterBase::GetCapsuleLocationFromBase(const FVector& BaseLocation, float ZOffset) const
+{
+	const UCapsuleComponent* CapsuleComp = GetCapsuleComponent();
+	const float Height = CapsuleComp->GetScaledCapsuleHalfHeight() + ZOffset;
+
+	return BaseLocation + FVector(0.f, 0.f, Height);
+}
+
 #pragma endregion
