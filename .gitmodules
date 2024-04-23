@@ -1,0 +1,3 @@
+[submodule "Plugins/BMCore"]
+	path = Plugins/BMCore
+	url = https://github.com/BanMing/BMCore.git
